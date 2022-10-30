@@ -35,7 +35,7 @@ var (
 	flagDisableGPU  = pflag.BoolP("disable-gpu", "g", false, "Pass --disable-gpu to chrome")
 )
 
-func makeHandler(ctx context.Context, cache map[string]*PUNXML) func(http.ResponseWriter, *http.Request) {
+func makeHandler(cache map[string]*PUNXML, timeout time.Duration, showBrowser bool, doDebug bool, chromePath string, proxy string, disableGPU bool) func(http.ResponseWriter, *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ts := r.URL.Query().Get("time")
 		if ts == "" {
@@ -57,6 +57,11 @@ func makeHandler(ctx context.Context, cache map[string]*PUNXML) func(http.Respon
 		puns, ok := cache[k]
 		if !ok {
 			log.Printf("Cache miss for %s", k)
+
+			ctx, cancelFuncs := WithCancel(context.Background(), timeout, showBrowser, doDebug, chromePath, proxy, disableGPU)
+			for _, cancel := range cancelFuncs {
+				defer cancel()
+			}
 			puns, err = Fetch(ctx, year, int(month), day)
 			if err != nil {
 				w.WriteHeader(http.StatusInternalServerError)
@@ -88,13 +93,8 @@ func main() {
 	}
 	pflag.Parse()
 
-	ctx, cancelFuncs := WithCancel(context.Background(), *flagTimeout, *flagShowBrowser, *flagDebug, *flagChromePath, *flagProxy, *flagDisableGPU)
-	for _, cancel := range cancelFuncs {
-		defer cancel()
-	}
-
 	cache := make(map[string]*PUNXML)
-	http.HandleFunc("/", makeHandler(ctx, cache))
+	http.HandleFunc("/", makeHandler(cache, *flagTimeout, *flagShowBrowser, *flagDebug, *flagChromePath, *flagProxy, *flagDisableGPU))
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
 
