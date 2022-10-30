@@ -38,17 +38,16 @@ var (
 
 func makeHandler(cache map[string]*PUNXML, timeout time.Duration, showBrowser bool, doDebug bool, chromePath string, proxy string, disableGPU bool) func(http.ResponseWriter, *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
+		t := time.Now()
+		var err error
 		ts := r.URL.Query().Get("time")
-		if ts == "" {
-			w.WriteHeader(http.StatusBadRequest)
-			_, _ = w.Write([]byte("Time parameter is not set"))
-			return
-		}
-		t, err := time.Parse("2006-01-02 15:04", ts)
-		if err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			_, _ = w.Write([]byte("Time parameter format must be yyyy-mm-dd hh:mm"))
-			return
+		if ts != "" {
+			t, err = time.Parse("2006-01-02 15:04", ts)
+			if err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = w.Write([]byte("Time parameter format must be yyyy-mm-dd hh:mm"))
+				return
+			}
 		}
 		// TODO ensure that time zones do not cause an off-by-one
 		year, month, day := t.Date()
@@ -58,6 +57,7 @@ func makeHandler(cache map[string]*PUNXML, timeout time.Duration, showBrowser bo
 		// days with 23 items (Ora == 23 but not 24). This case is not handled
 		// yet
 		k := fmt.Sprintf("%d-%d-%d", year, month, day)
+		// FIXME lock access to cache
 		puns, ok := cache[k]
 		if !ok {
 			log.Printf("Cache miss for %s", k)
@@ -66,6 +66,7 @@ func makeHandler(cache map[string]*PUNXML, timeout time.Duration, showBrowser bo
 			for _, cancel := range cancelFuncs {
 				defer cancel()
 			}
+			// FIXME lock concurrent use of Fetch
 			puns, err = Fetch(ctx, year, int(month), day)
 			if err != nil {
 				w.WriteHeader(http.StatusInternalServerError)
