@@ -35,7 +35,7 @@ var (
 	flagDisableGPU  = pflag.BoolP("disable-gpu", "g", false, "Pass --disable-gpu to chrome")
 )
 
-func makeHandler(ctx context.Context) func(http.ResponseWriter, *http.Request) {
+func makeHandler(ctx context.Context, cache map[string]*PUNXML) func(http.ResponseWriter, *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ts := r.URL.Query().Get("time")
 		if ts == "" {
@@ -51,11 +51,19 @@ func makeHandler(ctx context.Context) func(http.ResponseWriter, *http.Request) {
 		}
 		// TODO ensure that time zones do not cause an off-by-one
 		year, month, day := t.Date()
-		puns, err := Fetch(ctx, year, int(month), day)
-		if err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			_, _ = w.Write([]byte(fmt.Sprintf("Fetch failed: %v", err)))
-			return
+		// TODO if fetching today's data, ensure that it's fresh (i.e. that
+		// there is new data for the requested hour)
+		k := fmt.Sprintf("%d-%d-%d", year, month, day)
+		puns, ok := cache[k]
+		if !ok {
+			log.Printf("Cache miss for %s", k)
+			puns, err = Fetch(ctx, year, int(month), day)
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				_, _ = w.Write([]byte(fmt.Sprintf("Fetch failed: %v", err)))
+				return
+			}
+			cache[k] = puns
 		}
 		for _, p := range puns.Prezzi {
 			if p.Ora == t.Hour() {
@@ -85,7 +93,8 @@ func main() {
 		defer cancel()
 	}
 
-	http.HandleFunc("/", makeHandler(ctx))
+	cache := make(map[string]*PUNXML)
+	http.HandleFunc("/", makeHandler(ctx, cache))
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
 
