@@ -53,6 +53,9 @@ func makeHandler(cache map[string]*PUNXML, timeout time.Duration, showBrowser bo
 		year, month, day := t.Date()
 		// TODO if fetching today's data, ensure that it's fresh (i.e. that
 		// there is new data for the requested hour)
+		// FIXME during DST changes there are days with 25 items (Ora == 25) and
+		// days with 23 items (Ora == 23 but not 24). This case is not handled
+		// yet
 		k := fmt.Sprintf("%d-%d-%d", year, month, day)
 		puns, ok := cache[k]
 		if !ok {
