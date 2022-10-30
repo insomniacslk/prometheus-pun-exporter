@@ -27,12 +27,13 @@ const (
 )
 
 var (
-	flagDebug       = pflag.BoolP("debug", "d", false, "Enable debug log")
-	flagShowBrowser = pflag.BoolP("show-browser", "b", false, "show browser, useful for debugging")
-	flagChromePath  = pflag.StringP("chrome-path", "C", "", "Custom path for chrome browser")
-	flagProxy       = pflag.StringP("proxy", "P", "", "HTTP proxy")
-	flagTimeout     = pflag.DurationP("timeout", "t", 2*time.Minute, "Global timeout as a parsable duration (e.g. 1h12m)")
-	flagDisableGPU  = pflag.BoolP("disable-gpu", "g", false, "Pass --disable-gpu to chrome")
+	flagDebug         = pflag.BoolP("debug", "d", false, "Enable debug log")
+	flagShowBrowser   = pflag.BoolP("show-browser", "b", false, "show browser, useful for debugging")
+	flagChromePath    = pflag.StringP("chrome-path", "C", "", "Custom path for chrome browser")
+	flagProxy         = pflag.StringP("proxy", "P", "", "HTTP proxy")
+	flagTimeout       = pflag.DurationP("timeout", "t", 2*time.Minute, "Global timeout as a parsable duration (e.g. 1h12m)")
+	flagDisableGPU    = pflag.BoolP("disable-gpu", "g", false, "Pass --disable-gpu to chrome")
+	flagListenAddress = pflag.StringP("listen-address", "l", ":8080", "HTTP listen address")
 )
 
 func makeHandler(cache map[string]*PUNXML, timeout time.Duration, showBrowser bool, doDebug bool, chromePath string, proxy string, disableGPU bool) func(http.ResponseWriter, *http.Request) {
@@ -99,7 +100,8 @@ func main() {
 
 	cache := make(map[string]*PUNXML)
 	http.HandleFunc("/", makeHandler(cache, *flagTimeout, *flagShowBrowser, *flagDebug, *flagChromePath, *flagProxy, *flagDisableGPU))
-	log.Fatal(http.ListenAndServe(":8080", nil))
+	log.Printf("Listening on %s", *flagListenAddress)
+	log.Fatal(http.ListenAndServe(*flagListenAddress, nil))
 }
 
 // Fetch the PUN data from mercatoelettrico.org for the provided date.
