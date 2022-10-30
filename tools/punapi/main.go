@@ -71,7 +71,8 @@ func makeHandler(cache map[string]*PUNXML, timeout time.Duration, showBrowser bo
 			cache[k] = puns
 		}
 		for _, p := range puns.Prezzi {
-			if p.Ora == t.Hour() {
+			// Ora starts at 1, Hour starts at 0
+			if p.Ora == t.Hour()+1 {
 				_, _ = w.Write([]byte(fmt.Sprintf("%.6f", p.PUN)))
 				return
 			}
