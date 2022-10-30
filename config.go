@@ -45,9 +45,10 @@ func loadConfig(overrides map[string]interface{}) (*Config, error) {
 			}
 			log.Printf("Created default configuration file at '%s'", configFile)
 		}
-	}
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal configuration: %w", err)
+	} else {
+		if err := json.Unmarshal(data, &cfg); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal configuration: %w", err)
+		}
 	}
 	// apply overrides
 	for k, v := range overrides {
