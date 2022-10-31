@@ -36,7 +36,7 @@ var (
 	flagListenAddress = pflag.StringP("listen-address", "l", ":8080", "HTTP listen address")
 )
 
-func makeHandler(cache map[string]*PUNXML, timeout time.Duration, showBrowser bool, doDebug bool, chromePath string, proxy string, disableGPU bool) func(http.ResponseWriter, *http.Request) {
+func makeHandler(cache Cache, timeout time.Duration, showBrowser bool, doDebug bool, chromePath string, proxy string, disableGPU bool) func(http.ResponseWriter, *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		t := time.Now()
 		var err error
@@ -57,25 +57,25 @@ func makeHandler(cache map[string]*PUNXML, timeout time.Duration, showBrowser bo
 		// days with 23 items (Ora == 23 but not 24). This case is not handled
 		// yet
 		k := fmt.Sprintf("%d-%d-%d", year, month, day)
-		// FIXME lock access to cache
-		puns, ok := cache[k]
-		if !ok {
-			log.Printf("Cache miss for %s", k)
+		// FIXME lock access to cache for concurrent use
+		entry, ok := cache[k]
+		if !ok || time.Since(entry.Ts) > time.Hour {
+			log.Printf("Cache miss or expired for %s", k)
 
 			ctx, cancelFuncs := WithCancel(context.Background(), timeout, showBrowser, doDebug, chromePath, proxy, disableGPU)
 			for _, cancel := range cancelFuncs {
 				defer cancel()
 			}
 			// FIXME lock concurrent use of Fetch
-			puns, err = Fetch(ctx, year, int(month), day)
+			puns, err := Fetch(ctx, year, int(month), day)
 			if err != nil {
 				w.WriteHeader(http.StatusInternalServerError)
 				_, _ = w.Write([]byte(fmt.Sprintf("Fetch failed: %v", err)))
 				return
 			}
-			cache[k] = puns
+			cache[k] = CacheEntry{PUN: puns, Ts: time.Now()}
 		}
-		for _, p := range puns.Prezzi {
+		for _, p := range entry.PUN.Prezzi {
 			// Ora starts at 1, Hour starts at 0
 			if p.Ora == t.Hour()+1 {
 				_, _ = w.Write([]byte(fmt.Sprintf("%.6f", p.PUN)))
@@ -90,6 +90,13 @@ func makeHandler(cache map[string]*PUNXML, timeout time.Duration, showBrowser bo
 	}
 }
 
+type CacheEntry struct {
+	PUN *PUNXML
+	Ts  time.Time
+}
+
+type Cache map[string]CacheEntry
+
 func main() {
 	pflag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "%s: expose an HTTP API to retrieve the Prezzo Unico Nazionale from MercatoElettrico.org's data.\n\n", progname)
@@ -99,7 +106,7 @@ func main() {
 	}
 	pflag.Parse()
 
-	cache := make(map[string]*PUNXML)
+	cache := make(Cache, 0)
 	http.HandleFunc("/", makeHandler(cache, *flagTimeout, *flagShowBrowser, *flagDebug, *flagChromePath, *flagProxy, *flagDisableGPU))
 	log.Printf("Listening on %s", *flagListenAddress)
 	log.Fatal(http.ListenAndServe(*flagListenAddress, nil))
