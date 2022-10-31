@@ -13,6 +13,7 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/chromedp/cdproto/browser"
@@ -36,7 +37,7 @@ var (
 	flagListenAddress = pflag.StringP("listen-address", "l", ":8080", "HTTP listen address")
 )
 
-func makeHandler(cache Cache, timeout time.Duration, showBrowser bool, doDebug bool, chromePath string, proxy string, disableGPU bool) func(http.ResponseWriter, *http.Request) {
+func makeHandler(cache *Cache, timeout time.Duration, showBrowser bool, doDebug bool, chromePath string, proxy string, disableGPU bool) func(http.ResponseWriter, *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		t := time.Now()
 		var err error
@@ -51,19 +52,17 @@ func makeHandler(cache Cache, timeout time.Duration, showBrowser bool, doDebug b
 		}
 		// TODO ensure that time zones do not cause an off-by-one
 		year, month, day := t.Date()
-		// TODO if fetching today's data, ensure that it's fresh (i.e. that
-		// there is new data for the requested hour)
 		// FIXME during DST changes there are days with 25 items (Ora == 25) and
 		// days with 23 items (Ora == 23 but not 24). This case is not handled
 		// yet
 		k := fmt.Sprintf("%d-%d-%d", year, month, day)
 		// FIXME lock access to cache for concurrent use
-		entry, ok := cache[k]
+		pun, ok := cache.Get(k)
 		// cache miss if:
 		// * the entry is not in the cache
-		// * the entry is older than one hour
+		// * the entry has expired
 		// * we are at the minute 0 of the hour (expecting an update of the PUN value)
-		if !ok || time.Since(entry.Ts) > time.Hour || time.Now().Minute() == 0 {
+		if !ok || time.Now().Minute() == 0 {
 			log.Printf("Cache miss or expired for %s", k)
 
 			ctx, cancelFuncs := WithCancel(context.Background(), timeout, showBrowser, doDebug, chromePath, proxy, disableGPU)
@@ -71,15 +70,16 @@ func makeHandler(cache Cache, timeout time.Duration, showBrowser bool, doDebug b
 				defer cancel()
 			}
 			// FIXME lock concurrent use of Fetch
-			puns, err := Fetch(ctx, year, int(month), day)
+			v, err := Fetch(ctx, year, int(month), day)
 			if err != nil {
 				w.WriteHeader(http.StatusInternalServerError)
 				_, _ = w.Write([]byte(fmt.Sprintf("Fetch failed: %v", err)))
 				return
 			}
-			cache[k] = CacheEntry{PUN: puns, Ts: time.Now()}
+			cache.Put(k, v)
+			pun = v
 		}
-		for _, p := range entry.PUN.Prezzi {
+		for _, p := range pun.Prezzi {
 			// Ora starts at 1, Hour starts at 0
 			if p.Ora == t.Hour()+1 {
 				_, _ = w.Write([]byte(fmt.Sprintf("%.6f", p.PUN)))
@@ -99,7 +99,41 @@ type CacheEntry struct {
 	Ts  time.Time
 }
 
-type Cache map[string]CacheEntry
+type Cache struct {
+	entries map[string]*CacheEntry
+	TTL     time.Duration
+	mu      sync.Mutex
+}
+
+func (c *Cache) Get(k string) (*PUNXML, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	// TODO check if cache expired
+	e, ok := c.entries[k]
+	if ok {
+		if time.Since(e.Ts) > c.TTL {
+			return nil, false
+		}
+		return e.PUN, true
+	}
+	return nil, false
+}
+
+func (c *Cache) Put(k string, v *PUNXML) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.entries[k] = &CacheEntry{
+		PUN: v,
+		Ts:  time.Now(),
+	}
+}
+
+func NewCache(ttl time.Duration) *Cache {
+	return &Cache{
+		entries: make(map[string]*CacheEntry),
+		TTL:     ttl,
+	}
+}
 
 func main() {
 	pflag.Usage = func() {
@@ -110,7 +144,8 @@ func main() {
 	}
 	pflag.Parse()
 
-	cache := make(Cache, 0)
+	// TODO make TTL configurable
+	cache := NewCache(time.Hour)
 	http.HandleFunc("/", makeHandler(cache, *flagTimeout, *flagShowBrowser, *flagDebug, *flagChromePath, *flagProxy, *flagDisableGPU))
 	log.Printf("Listening on %s", *flagListenAddress)
 	log.Fatal(http.ListenAndServe(*flagListenAddress, nil))
