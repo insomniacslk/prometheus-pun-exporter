@@ -59,7 +59,11 @@ func makeHandler(cache Cache, timeout time.Duration, showBrowser bool, doDebug b
 		k := fmt.Sprintf("%d-%d-%d", year, month, day)
 		// FIXME lock access to cache for concurrent use
 		entry, ok := cache[k]
-		if !ok || time.Since(entry.Ts) > time.Hour {
+		// cache miss if:
+		// * the entry is not in the cache
+		// * the entry is older than one hour
+		// * we are at the minute 0 of the hour (expecting an update of the PUN value)
+		if !ok || time.Since(entry.Ts) > time.Hour || time.Now().Minute() == 0 {
 			log.Printf("Cache miss or expired for %s", k)
 
 			ctx, cancelFuncs := WithCancel(context.Background(), timeout, showBrowser, doDebug, chromePath, proxy, disableGPU)
