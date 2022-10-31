@@ -1,4 +1,4 @@
-// retrieve my paid content from https://www.brunobarbieri.blog/barbieriplus-membri/
+// retrieve the PUN - Prezzo Unico Nazionale from MercatoElettrico.org's XML files.
 package main
 
 import (
