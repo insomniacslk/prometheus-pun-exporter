@@ -5,6 +5,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"strconv"
 	"time"
 
@@ -15,12 +16,23 @@ import (
 var (
 	flagPath          = flag.String("p", "/metrics", "HTTP path where to expose metrics to")
 	flagListen        = flag.String("l", ":9106", "Address to listen to")
-	flagAPIHost       = flag.String("A", "", "URL of the PUN API endpoint")
+	flagAPIURL        = flag.String("A", "", "URL of the PUN API endpoint")
 	flagSleepInterval = flag.Duration("i", time.Minute, "Interval between speedtest executions, expressed as a Go duration string")
 )
 
 func main() {
 	flag.Parse()
+
+	if *flagAPIURL == "" {
+		log.Fatal("API URL cannot be empty")
+	}
+	u, err := url.Parse(*flagAPIURL)
+	if err != nil {
+		log.Fatalf("Invalid API URL: %v", err)
+	}
+	if u.Scheme == "" || u.Host == "" {
+		log.Fatalf("Scheme or host cannot be empty in API URL")
+	}
 
 	punGauge := prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
@@ -42,7 +54,7 @@ func main() {
 			}
 			firstrun = false
 			log.Printf("Fetching PUN value...")
-			resp, err := http.Get(*flagAPIHost)
+			resp, err := http.Get(*flagAPIURL)
 			if err != nil {
 				log.Printf("Failed to get PUN value: %v", err)
 				continue
