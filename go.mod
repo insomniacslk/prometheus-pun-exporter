@@ -1,4 +1,4 @@
-module github.com/insomniacslk/powercost
+module github.com/insomniacslk/prometheus-pun-exporter
 
 go 1.19
 
