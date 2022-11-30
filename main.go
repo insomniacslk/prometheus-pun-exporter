@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -41,8 +42,33 @@ func main() {
 		},
 		[]string{},
 	)
+	punMonthlyAvgGauge := prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "mercatoelettrico_pun_month_average",
+			Help: "PUN - Curremt month's average for Prezzo Unico Nazionale for the Italian Mercato Elettrico",
+		},
+		[]string{},
+	)
 	if err := prometheus.Register(punGauge); err != nil {
 		log.Fatalf("Failed to register PUN gauge: %v", err)
+	}
+	if err := prometheus.Register(punMonthlyAvgGauge); err != nil {
+		log.Fatalf("Failed to register PUN monthly average gauge: %v", err)
+	}
+
+	getPun := func(endpoint string) (float64, error) {
+		resp, err := http.Get(endpoint)
+		if err != nil {
+			return 0, fmt.Errorf("GET failed: %w", err)
+		}
+		data, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return 0, fmt.Errorf("HTTP body read failed: %w", err)
+		}
+		if err := resp.Body.Close(); err != nil {
+			log.Printf("Warning: failed to close HTTP body: %v", err)
+		}
+		return strconv.ParseFloat(string(data), 64)
 	}
 
 	go func() {
@@ -54,23 +80,22 @@ func main() {
 			}
 			firstrun = false
 			log.Printf("Fetching PUN value...")
-			resp, err := http.Get(*flagAPIURL)
+			pun, err := getPun(*flagAPIURL)
 			if err != nil {
-				log.Printf("Failed to get PUN value: %v", err)
+				log.Printf("Failed to fetch PUN value: %v", err)
+			} else {
+				punGauge.WithLabelValues().Set(pun)
+			}
+			log.Printf("Fetching PUN monthly average value...")
+			punavg, err := getPun(*flagAPIURL + "/month")
+			if err != nil {
+				log.Printf("Failed to fetch PUN monthly average value: %v", err)
+			} else {
+				punMonthlyAvgGauge.WithLabelValues().Set(punavg)
+			}
+			if err != nil {
 				continue
 			}
-			data, err := io.ReadAll(resp.Body)
-			if err != nil {
-				continue
-			}
-			if err := resp.Body.Close(); err != nil {
-				log.Printf("Warning: failed to close HTTP body: %v", err)
-			}
-			v, err := strconv.ParseFloat(string(data), 64)
-			if err != nil {
-				continue
-			}
-			punGauge.WithLabelValues().Set(v)
 		}
 	}()
 

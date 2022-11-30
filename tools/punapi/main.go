@@ -37,18 +37,73 @@ var (
 	flagListenAddress = pflag.StringP("listen-address", "l", ":8080", "HTTP listen address")
 )
 
-func makeHandler(cache *Cache, timeout time.Duration, showBrowser bool, doDebug bool, chromePath string, proxy string, disableGPU bool) func(http.ResponseWriter, *http.Request) {
+func getTimeFromQuery(w http.ResponseWriter, r *http.Request) *time.Time {
+	t := time.Now()
+	var err error
+	ts := r.URL.Query().Get("time")
+	if ts != "" {
+		t, err = time.Parse("2006-01-02 15:04", ts)
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte("Time parameter format must be yyyy-mm-dd hh:mm"))
+			return nil
+		}
+	}
+	return &t
+}
+
+func makeMonthHandler(cache *Cache, timeout time.Duration, showBrowser bool, doDebug bool, chromePath string, proxy string, disableGPU bool) func(http.ResponseWriter, *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
-		t := time.Now()
-		var err error
-		ts := r.URL.Query().Get("time")
-		if ts != "" {
-			t, err = time.Parse("2006-01-02 15:04", ts)
+		t := getTimeFromQuery(w, r)
+		if t == nil {
+			return
+		}
+		year, month, _ := t.Date()
+		k := fmt.Sprintf("%d-%d", year, month)
+		loc := time.Now().Location()
+		firstDay := time.Date(year, month, 1, 0, 0, 0, 0, loc)
+		lastDay := firstDay.AddDate(0, 1, -1)
+		log.Printf("from %s to %s", firstDay, lastDay)
+		puns, ok := cache.Get(k)
+		if !ok {
+			log.Printf("Cache miss or expired for %s", k)
+			ctx, cancelFuncs := WithCancel(context.Background(), timeout, showBrowser, doDebug, chromePath, proxy, disableGPU)
+			for _, cancel := range cancelFuncs {
+				defer cancel()
+			}
+			// FIXME lock concurrent use of Fetch
+			v, err := Fetch(ctx, firstDay, lastDay)
 			if err != nil {
-				w.WriteHeader(http.StatusBadRequest)
-				_, _ = w.Write([]byte("Time parameter format must be yyyy-mm-dd hh:mm"))
+				w.WriteHeader(http.StatusInternalServerError)
+				_, _ = w.Write([]byte(fmt.Sprintf("Fetch failed: %v", err)))
 				return
 			}
+			cache.Put(k, v)
+			puns = v
+		}
+		var (
+			sum   float64
+			count uint
+		)
+		for _, pun := range puns {
+			for _, p := range pun.Prezzi {
+				sum += float64(p.PUN)
+				count++
+			}
+		}
+		if count == 0 {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(fmt.Sprintf("No PUN found for %s", t)))
+		}
+		_, _ = w.Write([]byte(fmt.Sprintf("%.6f", sum/(float64(count)))))
+	}
+}
+
+func makeHandler(cache *Cache, timeout time.Duration, showBrowser bool, doDebug bool, chromePath string, proxy string, disableGPU bool) func(http.ResponseWriter, *http.Request) {
+	return func(w http.ResponseWriter, r *http.Request) {
+		t := getTimeFromQuery(w, r)
+		if t == nil {
+			return
 		}
 		// TODO ensure that time zones do not cause an off-by-one
 		year, month, day := t.Date()
@@ -56,29 +111,33 @@ func makeHandler(cache *Cache, timeout time.Duration, showBrowser bool, doDebug 
 		// days with 23 items (Ora == 23 but not 24). This case is not handled
 		// yet
 		k := fmt.Sprintf("%d-%d-%d", year, month, day)
-		// FIXME lock access to cache for concurrent use
-		pun, ok := cache.Get(k)
+		puns, ok := cache.Get(k)
 		// cache miss if:
 		// * the entry is not in the cache
 		// * the entry has expired
 		// * we are at the minute 0 of the hour (expecting an update of the PUN value)
 		if !ok || time.Now().Minute() == 0 {
 			log.Printf("Cache miss or expired for %s", k)
-
 			ctx, cancelFuncs := WithCancel(context.Background(), timeout, showBrowser, doDebug, chromePath, proxy, disableGPU)
 			for _, cancel := range cancelFuncs {
 				defer cancel()
 			}
 			// FIXME lock concurrent use of Fetch
-			v, err := Fetch(ctx, year, int(month), day)
+			v, err := Fetch(ctx, *t, *t)
 			if err != nil {
 				w.WriteHeader(http.StatusInternalServerError)
 				_, _ = w.Write([]byte(fmt.Sprintf("Fetch failed: %v", err)))
 				return
 			}
 			cache.Put(k, v)
-			pun = v
+			puns = v
 		}
+		if len(puns) != 1 {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(fmt.Sprintf("Want exactly 1 PUN, got %d", len(puns))))
+			return
+		}
+		pun := puns[0]
 		for _, p := range pun.Prezzi {
 			// Ora starts at 1, Hour starts at 0
 			if p.Ora == t.Hour()+1 {
@@ -86,16 +145,14 @@ func makeHandler(cache *Cache, timeout time.Duration, showBrowser bool, doDebug 
 				return
 			}
 		}
-		if err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			_, _ = w.Write([]byte(fmt.Sprintf("No PUN found for %s: %v", t, err)))
-			return
-		}
+		// if we are here, no PUN was found for the requested hour
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(fmt.Sprintf("No PUN found for %s", t)))
 	}
 }
 
 type CacheEntry struct {
-	PUN *PUNXML
+	PUN []PUNXML
 	Ts  time.Time
 }
 
@@ -105,7 +162,7 @@ type Cache struct {
 	mu      sync.Mutex
 }
 
-func (c *Cache) Get(k string) (*PUNXML, bool) {
+func (c *Cache) Get(k string) ([]PUNXML, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	// TODO check if cache expired
@@ -119,7 +176,7 @@ func (c *Cache) Get(k string) (*PUNXML, bool) {
 	return nil, false
 }
 
-func (c *Cache) Put(k string, v *PUNXML) {
+func (c *Cache) Put(k string, v []PUNXML) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.entries[k] = &CacheEntry{
@@ -147,12 +204,13 @@ func main() {
 	// TODO make TTL configurable
 	cache := NewCache(time.Hour)
 	http.HandleFunc("/", makeHandler(cache, *flagTimeout, *flagShowBrowser, *flagDebug, *flagChromePath, *flagProxy, *flagDisableGPU))
+	http.HandleFunc("/month", makeMonthHandler(cache, *flagTimeout, *flagShowBrowser, *flagDebug, *flagChromePath, *flagProxy, *flagDisableGPU))
 	log.Printf("Listening on %s", *flagListenAddress)
 	log.Fatal(http.ListenAndServe(*flagListenAddress, nil))
 }
 
 // Fetch the PUN data from mercatoelettrico.org for the provided date.
-func Fetch(ctx context.Context, year, month, day int) (*PUNXML, error) {
+func Fetch(ctx context.Context, start, end time.Time) ([]PUNXML, error) {
 	tasks := chromedp.Tasks{
 		chromedp.Navigate(startURL),
 	}
@@ -196,8 +254,8 @@ func Fetch(ctx context.Context, year, month, day int) (*PUNXML, error) {
 	endDateInput := `//*[@id="ContentPlaceHolder1_tbDataStop"]`
 	downloadButton := `//*[@id="ContentPlaceHolder1_btnScarica"]`
 	loc := time.Now().Location()
-	startDate := time.Date(year, time.Month(month), day, 0, 0, 0, 0, loc).Format("02/01/2006")
-	endDate := startDate
+	startDate := start.In(loc).Format("02/01/2006")
+	endDate := end.In(loc).Format("02/01/2006")
 	tmpdir, err := os.MkdirTemp("", progname)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create temp dir: %w", err)
@@ -297,7 +355,7 @@ func (p *Price) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error {
 	return nil
 }
 
-func ZipToPUNs(zipfile string) (*PUNXML, error) {
+func ZipToPUNs(zipfile string) ([]PUNXML, error) {
 	// extract zip file
 	archive, err := zip.OpenReader(zipfile)
 	if err != nil {
@@ -309,27 +367,32 @@ func ZipToPUNs(zipfile string) (*PUNXML, error) {
 			filelist = append(filelist, f)
 		}
 	}
-	if len(filelist) != 1 {
-		return nil, fmt.Errorf("expected 1 XML file in ZIP archive, got %d", len(archive.File))
+	if len(filelist) < 1 {
+		return nil, fmt.Errorf("expected at least one XML file in ZIP archive, got %d", len(archive.File))
 	}
-	fd, err := filelist[0].Open()
-	if err != nil {
-		return nil, fmt.Errorf("failed to open XML file '%s' contained in ZIP file: %w", filelist[0].Name, err)
-	}
-	defer func() {
-		if err := fd.Close(); err != nil {
-			log.Printf("Failed to close XML file '%s' contained in ZIP file: %v", filelist[0].Name, err)
+	punlist := make([]PUNXML, 0)
+	for _, file := range filelist {
+		// TODO parse every XML in filelist and return a list of PUNXML
+		fd, err := file.Open()
+		if err != nil {
+			return nil, fmt.Errorf("failed to open XML file '%s' contained in ZIP file: %w", filelist[0].Name, err)
 		}
-	}()
-	data, err := io.ReadAll(fd)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read XML file '%s' contained in ZIP file: %w", filelist[0].Name, err)
+		defer func() {
+			if err := fd.Close(); err != nil {
+				log.Printf("Failed to close XML file '%s' contained in ZIP file: %v", filelist[0].Name, err)
+			}
+		}()
+		data, err := io.ReadAll(fd)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read XML file '%s' contained in ZIP file: %w", filelist[0].Name, err)
+		}
+		var pun PUNXML
+		if err := xml.Unmarshal(data, &pun); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal XML: %w", err)
+		}
+		punlist = append(punlist, pun)
 	}
-	var pun PUNXML
-	if err := xml.Unmarshal(data, &pun); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal XML: %w", err)
-	}
-	return &pun, nil
+	return punlist, nil
 }
 
 // WithCancel returns a chromedp context with a cancellation function.

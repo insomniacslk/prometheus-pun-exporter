@@ -6,6 +6,7 @@ XML files. `punapi` requires Chrome headless, so you may want to run it on a dif
 
 It exports one metric:
 * `mercatoelettrico_pun`, a gauge with the value of the hour for one MWh of electricity
+* `mercatoelettrico_pun_monthly_average`, a gauge with the monthly average of all the PUN values of the requested month
 
 ## Run it
 
