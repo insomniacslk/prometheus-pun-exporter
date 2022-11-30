@@ -211,6 +211,7 @@ func main() {
 
 // Fetch the PUN data from mercatoelettrico.org for the provided date.
 func Fetch(ctx context.Context, start, end time.Time) ([]PUNXML, error) {
+	log.Printf("Fetching PUN XML from %s to %s", start.Format("2006-01-02"), end.Format("2006-01-02"))
 	tasks := chromedp.Tasks{
 		chromedp.Navigate(startURL),
 	}
@@ -372,6 +373,7 @@ func ZipToPUNs(zipfile string) ([]PUNXML, error) {
 	}
 	punlist := make([]PUNXML, 0)
 	for _, file := range filelist {
+		log.Printf("Parsing file %s", file.Name)
 		// TODO parse every XML in filelist and return a list of PUNXML
 		fd, err := file.Open()
 		if err != nil {
