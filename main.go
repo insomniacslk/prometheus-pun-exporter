@@ -83,7 +83,7 @@ func main() {
 		log.Printf("Creating custom gauge `%s` with formula `%s`", custom_name, custom_expr)
 		punCustomGauge = prometheus.NewGaugeVec(
 			prometheus.GaugeOpts{
-				Name: "mercatoelettrico_pun_" + custom_name,
+				Name: "mercatoelettrico_" + custom_name,
 				Help: "PUN - Custom metric using Prezzo Unico Nazionale - formula: " + custom_expr,
 			},
 			[]string{},
