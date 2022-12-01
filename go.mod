@@ -5,8 +5,8 @@ go 1.19
 require (
 	github.com/chromedp/cdproto v0.0.0-20221029224954-108014bf7279
 	github.com/chromedp/chromedp v0.8.6
-	github.com/insomniacslk/xjson v0.0.0-20210106140854-1589ccfd1a1a
 	github.com/kirsle/configdir v0.0.0-20170128060238-e45d2f54772f
+	github.com/maja42/goval v1.3.1
 	github.com/prometheus/client_golang v1.13.0
 	github.com/spf13/pflag v1.0.5
 )
