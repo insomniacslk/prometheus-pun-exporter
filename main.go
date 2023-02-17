@@ -132,17 +132,19 @@ func main() {
 			} else {
 				punMonthlyAvgGauge.WithLabelValues().Set(punavg)
 			}
-			// export custom metric
-			log.Printf("Computing custom metric `%s`", custom_name)
-			variables := map[string]interface{}{
-				"PUN":  pun,
-				"MPUN": punavg,
-			}
-			custom_metric, err := eval.Evaluate(custom_expr, variables, nil)
-			if err != nil {
-				log.Printf("Failed to evaluate custom metric: %v", err)
-			} else {
-				punCustomGauge.WithLabelValues().Set(custom_metric.(float64))
+			if eval != nil {
+				// export custom metric
+				log.Printf("Computing custom metric `%s`", custom_name)
+				variables := map[string]interface{}{
+					"PUN":  pun,
+					"MPUN": punavg,
+				}
+				custom_metric, err := eval.Evaluate(custom_expr, variables, nil)
+				if err != nil {
+					log.Printf("Failed to evaluate custom metric: %v", err)
+				} else {
+					punCustomGauge.WithLabelValues().Set(custom_metric.(float64))
+				}
 			}
 		}
 	}()
